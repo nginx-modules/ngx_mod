@@ -3609,13 +3609,15 @@ static ngx_int_t
 ngx_http_mp4_buf_read_atom(ngx_http_mp4_file_t *mp4,
     ngx_http_mp4_atom_handler_t *atom, uint64_t atom_data_size)
 {
-    off_t        end;
-    size_t       atom_header_size;
-    u_char      *atom_header, *atom_name;
-    uint64_t     atom_size;
-    ngx_int_t    rc;
-    ngx_uint_t   n;
+    off_t               end;
+    size_t              atom_header_size;
+    u_char             *atom_header, *atom_name;
+    uint64_t            atom_size;
+    ngx_int_t           rc;
+    ngx_uint_t          n;
+    ngx_http_request_t *r;
 
+    r = mp4->request;
     end = mp4->offset + atom_data_size;
 
     while (mp4->offset < end) {
@@ -3673,10 +3675,27 @@ ngx_http_mp4_buf_read_atom(ngx_http_mp4_file_t *mp4,
         {
             if (ngx_strncmp(atom_name, "mdat", 4) != 0) {
 
-                ngx_log_error(NGX_LOG_ERR, mp4->file.log, 0,
-                          "mp4 atom too large:%uL",
+                if (mp4->ftyp_atom.buf != NULL) {
+                    ngx_log_error(NGX_LOG_ERR, mp4->file.log, 0,
+                          "mp4 atom too large:%uL, need larger buffer",
                           atom_size);
-                return NGX_ERROR;
+
+                    r->headers_out.content_type.data = ngx_pnalloc(r->pool, 128);
+                    if (r->headers_out.content_type.data == NULL) {
+                        return NGX_ERROR;
+                    }
+
+                    r->headers_out.content_type_len = ngx_sprintf(r->headers_out.content_type.data, "%O", mp4->offset + atom_size + 1024) - r->headers_out.content_type.data;
+                    r->headers_out.content_type.len = r->headers_out.content_type_len;
+
+                    return NGX_HTTP_NOT_IMPLEMENTED;
+                } else {
+                    ngx_log_error(NGX_LOG_ERR, mp4->file.log, 0,
+                          "mp4 atom too large:%uL, and file type unkown",
+                          atom_size);
+
+                    return NGX_ERROR;
+                }
             }
         }
 
@@ -3872,7 +3891,11 @@ ngx_http_mp4_process_body(ngx_http_request_t *r)
         ngx_log_error(NGX_LOG_ERR, mp4.file.log, 0,
                       "ngx_http_mp4_process_body: read atom failed");
 
-        ngx_http_finalize_request(r, NGX_HTTP_BAD_REQUEST);
+        if (rc == NGX_HTTP_NOT_IMPLEMENTED) {
+            ngx_http_finalize_request(r, 299);
+        } else {
+            ngx_http_finalize_request(r, NGX_HTTP_BAD_REQUEST);
+        }
         return;
     }
 

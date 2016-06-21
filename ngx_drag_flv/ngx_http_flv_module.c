@@ -18,22 +18,23 @@
 #define NGX_HTTP_FLV_AUDIO_TYPT                       0x8
 #define NGX_HTTP_FLV_VIDEO_TYPT                       0x9
 #define NGX_HTTP_FLV_SCRIPT_TYPT                      0x12
+#define NGX_HTTP_FLV_VIDEO_AVC_TYPE                   0x7
 
 
 #define NGX_HTTP_FLV_SCRIPT_FIRST_AMF_HEADER_SIZE     13
 #define NGX_HTTP_FLV_SCRIPT_SECOND_AMF_HEADER_SIZE    5
 
 
-#define NGX_HTTP_FLV_SCRIPT_TAG_NUMBER_TYPE           0x0
-#define NGX_HTTP_FLV_SCRIPT_TAG_BOOLEAN_TYPE          0x1
-#define NGX_HTTP_FLV_SCRIPT_TAG_STRING_TYPE           0x2
-#define NGX_HTTP_FLV_SCRIPT_TAG_OBJECT_TYPE           0x3
-#define NGX_HTTP_FLV_SCRIPT_TAG_ARRAY_TYPE            0x8
-#define NGX_HTTP_FLV_SCRIPT_TAG_OBJECT_END_TYPE       0x9
-#define NGX_HTTP_FLV_SCRIPT_TAG_STRICT_ARRAY_TYPE     0xa
-
-
-#define NGX_HTTP_FLV_VIDEO_AVC_TYPE                   0x7
+typedef enum {
+    NGX_HTTP_FLV_SCRIPT_TAG_NUMBER_TYPE        =      0x0,
+    NGX_HTTP_FLV_SCRIPT_TAG_BOOLEAN_TYPE       =      0x1,
+    NGX_HTTP_FLV_SCRIPT_TAG_STRING_TYPE        =      0x2,
+    NGX_HTTP_FLV_SCRIPT_TAG_OBJECT_TYPE        =      0x3,
+    NGX_HTTP_FLV_SCRIPT_TAG_ARRAY_TYPE         =      0x8,
+    NGX_HTTP_FLV_SCRIPT_TAG_OBJECT_END_TYPE    =      0x9,
+    NGX_HTTP_FLV_SCRIPT_TAG_STRICT_ARRAY_TYPE  =      0xa,
+    NGX_HTTP_FLV_SCRIPT_TAG_DATE_TYPE          =      0x0b,
+} NGX_HTTP_FLV_AMF_DATA_TYPE;
 
 
 typedef struct {
@@ -70,11 +71,17 @@ typedef struct {
     u_char               *buffer_start;
     u_char               *buffer_pos;
     u_char               *buffer_end;
-    u_char               *buffer_metadata_end;
+    u_char               *buffer_metadata_start;  /* start of data*/
+    u_char               *buffer_metadata_end;    /* end of data*/
 
     ngx_uint_t            start;
+    off_t                 end;
+    double                duration;
     double                start_timestamp;
     off_t                 start_offset;
+    off_t                 end_offset;
+    ngx_uint_t            start_frame_index;
+    ngx_uint_t            end_frame_index;
     off_t                 offset;
     off_t                 content_length;
 
@@ -121,9 +128,18 @@ typedef struct {
      ( ((uint8_t) ((u_char *) (p))[0] ) )
 
 
+#define ngx_flv_set_8value(p, n)                                             \
+    ((u_char *) (p))[0] = (u_char) ((uint8_t)  (n))
+
+
 #define ngx_flv_get_16value(p)                                                \
     ( ((uint16_t) ((u_char *) (p))[0] << 8)                                   \
     + (           ((u_char *) (p))[1]) )
+
+
+#define ngx_flv_set_16value(p, n)                                             \
+    ((u_char *) (p))[0] = (u_char) ((uint16_t) (n) >> 8);                    \
+    ((u_char *) (p))[1] = (u_char)             (n)
 
 
 #define ngx_flv_get_24value(p)                                                \
@@ -133,11 +149,24 @@ typedef struct {
     + (           ((u_char *) (p))[2]) )
 
 
+#define ngx_flv_set_24value(p, n)                                             \
+    ((u_char *) (p))[0] = (u_char) ((n) >> 16);                               \
+    ((u_char *) (p))[1] = (u_char) ((n) >> 8);                               \
+    ((u_char *) (p))[2] = (u_char)  (n)
+
+
 #define ngx_flv_get_32value(p)                                                \
     ( ((uint32_t) ((u_char *) (p))[0] << 24)                                  \
     + (           ((u_char *) (p))[1] << 16)                                  \
     + (           ((u_char *) (p))[2] << 8)                                   \
     + (           ((u_char *) (p))[3]) )
+
+
+#define ngx_flv_set_32value(p, n)                                             \
+    ((u_char *) (p))[0] = (u_char) ((n) >> 24);                               \
+    ((u_char *) (p))[1] = (u_char) ((n) >> 16);                               \
+    ((u_char *) (p))[2] = (u_char) ((n) >> 8);                                \
+    ((u_char *) (p))[3] = (u_char)  (n)
 
 
 #define ngx_flv_set_timestamp(p, n)                                           \
@@ -159,6 +188,10 @@ static ngx_int_t ngx_http_flv_parse_metadata_array_type(ngx_http_flv_file_t *flv
 static ngx_int_t ngx_http_flv_parse_metadata_tag(ngx_http_flv_file_t *flv, uint32_t tag_data_size);
 static ngx_int_t ngx_http_flv_parse_video_tag(ngx_http_flv_file_t *flv, uint32_t tag_data_size);
 static ngx_int_t ngx_http_flv_parse_audio_tag(ngx_http_flv_file_t *flv, uint32_t tag_data_size);
+static void ngx_flv_metadata_write_double(ngx_buf_t *buf, double value);
+static void ngx_flv_metadata_write_keyframes_array(ngx_http_flv_file_t *flv, ngx_buf_t *buf, ngx_array_t *array, ngx_str_t *name, off_t adjustment);
+static void ngx_flv_metadata_write_array_end(ngx_buf_t *buf);
+static ngx_int_t ngx_http_flv_package_metadata(ngx_http_flv_file_t *flv);
 static ngx_int_t ngx_http_flv_buf_read_tag(ngx_http_flv_file_t *flv);
 static void ngx_http_flv_set_tag_timestamp(ngx_http_flv_file_t *flv, ngx_buf_t *tag, double start_timestamp);
 static void ngx_http_flv_process_body(ngx_http_request_t *r);
@@ -414,6 +447,14 @@ ngx_http_flv_parse_metadata_strict_array_type(ngx_http_flv_file_t *flv, ngx_uint
                  offset += 2 + value.len;
                  continue;
 
+             case NGX_HTTP_FLV_SCRIPT_TAG_DATE_TYPE:
+                 if (end - header < 10) {
+                    return NGX_ERROR;
+                 }
+
+                 offset += 10;
+                 continue;
+
              default:
                  ngx_log_error(NGX_LOG_ERR, flv->log, 0,
                       "ngx_http_flv_parse_metadata_strict_array_type: unkown type %ui", type);
@@ -482,6 +523,10 @@ ngx_http_flv_parse_metadata_array_type(ngx_http_flv_file_t *flv, ngx_uint_t size
                  doublevalue.dc[6] = header[1];
                  doublevalue.dc[7] = header[0];
 
+                 if ((key.len == 8) && (ngx_strncmp("duration", key.data, key.len) == 0)) {
+                     flv->duration = doublevalue.dd;
+                 }
+
                  ngx_log_error(NGX_LOG_INFO, flv->log, 0,
                           "ngx_http_flv_parse_metadata_array_type: key = %V, value = %.1f",
                           &key, doublevalue.dd);
@@ -514,6 +559,14 @@ ngx_http_flv_parse_metadata_array_type(ngx_http_flv_file_t *flv, ngx_uint_t size
                           &key, &value);
 
                  offset += 2 + value.len;
+                 continue;
+
+             case NGX_HTTP_FLV_SCRIPT_TAG_DATE_TYPE:
+                 if (end - header < 10) {
+                    return NGX_ERROR;
+                 }
+
+                 offset += 10;
                  continue;
 
              case NGX_HTTP_FLV_SCRIPT_TAG_OBJECT_TYPE:
@@ -601,6 +654,7 @@ ngx_http_flv_parse_metadata_tag(ngx_http_flv_file_t *flv, uint32_t tag_data_size
 
     flv->metadata_tag.next = NULL;
     flv->metadata_tag.buf = tag;
+    flv->buffer_metadata_start = flv->buffer_pos;
     flv->buffer_metadata_end = flv->buffer_pos + tag_data_size;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, flv->log, 0, "parse flv metadata tag");
@@ -681,55 +735,79 @@ ngx_http_flv_parse_metadata_tag(ngx_http_flv_file_t *flv, uint32_t tag_data_size
     /*
      * compute nearest offset and times
     */
-    if (flv->metadata_filepositions->nelts != flv->metadata_times->nelts) {
+    if ((flv->metadata_filepositions->nelts != flv->metadata_times->nelts)
+       || (flv->metadata_filepositions->nelts == 0)) {
         ngx_log_error(NGX_LOG_ERR, flv->log, 0,
-                          "ngx_http_flv_parse_metadata_tag: filepositions.nelts = %ui, times.nelts = %ui, not equal",
+                          "ngx_http_flv_parse_metadata_tag: filepositions.nelts = %ui, times.nelts = %ui, not equal or zero",
                           flv->metadata_filepositions->nelts, flv->metadata_times->nelts);
 
         return NGX_ERROR;
     }
 
     node = flv->metadata_filepositions->elts;
+    flv->end_frame_index = flv->metadata_filepositions->nelts - 1;
+    flv->end_offset = node[flv->end_frame_index];
     for (i = 0; i < flv->metadata_filepositions->nelts; i++) {
 
         if (node[i] <= flv->start) {
             flv->start_offset = (ngx_uint_t)node[i];
+            flv->start_frame_index = i;
         } else {
 
             if (i == 0) {
                 flv->start_offset = (ngx_uint_t)node[i];
-                i++;
+                flv->start_frame_index = i;
             }
+
+            if (flv->end == -1) {
+                break;
+            }
+        }
+
+        if ((flv->end != -1) && (node[i] >= flv->end)) {
+            flv->end_offset = (ngx_uint_t)node[i];
+            flv->end_frame_index = i;
             break;
         }
     }
 
-    if (flv->start_offset == -1) {
+    if ((flv->start_offset == -1) || (flv->end_offset == -1)) {
         ngx_log_error(NGX_LOG_ERR, flv->log, 0,
-                          "ngx_http_flv_parse_metadata_tag: can't find nearest offset, args_start_offset = %O",
-                          flv->start);
+                          "ngx_http_flv_parse_metadata_tag: can't find nearest offset, args_start_offset = %O, args_end_offset = %O",
+                          flv->start, flv->end);
 
         return NGX_ERROR;
     }
 
-    i--;
-
-    if (i >= flv->metadata_times->nelts) {
+    if (flv->start_frame_index >= flv->metadata_times->nelts) {
         return NGX_ERROR;
     }
 
     node = flv->metadata_times->elts;
-    flv->start_timestamp = node[i];
+    flv->start_timestamp = node[flv->start_frame_index];
+
+    if ((flv->end == -1) && (flv->duration != 0)) {
+        flv->duration -= flv->start_timestamp;
+    } else {
+        flv->duration = node[flv->end_frame_index] - node[flv->start_frame_index];
+    }
 
     ngx_log_error(NGX_LOG_INFO, flv->log, 0,
-                          "ngx_http_flv_parse_metadata_tag: find nearest offset and timestamp, args_start_offset = %O, compute_offset = %O, timestamp = %.1f",
+                          "ngx_http_flv_parse_metadata_tag: find nearest offset and timestamp, args_start_offset = %O, compute_offset = %O, start_timestamp = %.1f",
                           flv->start, flv->start_offset, flv->start_timestamp);
 
     if (flv->start != (ngx_uint_t)flv->start_offset) {
         ngx_log_error(NGX_LOG_WARN, flv->log, 0,
-                      "ngx_http_flv_parse_metadata_tag: adjust offset from %O to %O", flv->start, flv->start_offset);
+                      "ngx_http_flv_parse_metadata_tag: adjust start offset from %O to %O", flv->start, flv->start_offset);
 
         flv->start = flv->start_offset;
+    }
+
+    if ((flv->end != -1) && (flv->end != flv->end_offset)) {
+        ngx_log_error(NGX_LOG_WARN, flv->log, 0,
+                      "ngx_http_flv_parse_metadata_tag: adjust end offset from %O to %O", flv->end, flv->end_offset);
+
+        flv->end = flv->end_offset;
     }
 
     return NGX_OK;
@@ -804,6 +882,177 @@ ngx_http_flv_parse_audio_tag(ngx_http_flv_file_t *flv, uint32_t tag_data_size)
 }
 
 
+static void
+ngx_flv_metadata_write_double(ngx_buf_t *buf, double value)
+{
+    union {
+        u_char dc[8];
+        double dd;
+    } d;
+    u_char b[8];
+
+    d.dd = value;
+    b[0] = d.dc[7];
+    b[1] = d.dc[6];
+    b[2] = d.dc[5];
+    b[3] = d.dc[4];
+    b[4] = d.dc[3];
+    b[5] = d.dc[2];
+    b[6] = d.dc[1];
+    b[7] = d.dc[0];
+
+    ngx_flv_set_8value(buf->last, NGX_HTTP_FLV_SCRIPT_TAG_NUMBER_TYPE);
+    buf->last += 1;
+
+    ngx_memcpy(buf->last, b, 8);
+    buf->last += 8;
+}
+
+
+static void
+ngx_flv_metadata_write_keyframes_array(ngx_http_flv_file_t *flv, ngx_buf_t *buf, ngx_array_t *array, ngx_str_t *name, off_t adjustment)
+{
+    ngx_uint_t        i, size;
+    double           *node;
+
+    size = flv->end_frame_index - flv->start_frame_index + 1;
+
+    ngx_flv_set_16value(buf->last, name->len);
+    buf->last += 2;
+
+    ngx_memcpy(buf->last, name->data, name->len);
+    buf->last += name->len;
+
+    ngx_flv_set_8value(buf->last, NGX_HTTP_FLV_SCRIPT_TAG_STRICT_ARRAY_TYPE);
+    buf->last += 1;
+
+    ngx_flv_set_32value(buf->last, size);
+    buf->last += 4;
+
+    node = array->elts;
+    for (i = flv->start_frame_index; i <= flv->end_frame_index; i++) {
+        ngx_flv_metadata_write_double(buf, node[i] + adjustment);
+    }
+}
+
+
+static void
+ngx_flv_metadata_write_array_end(ngx_buf_t *buf)
+{
+    ngx_flv_set_16value(buf->last, 0);
+    buf->last += 2;
+
+    ngx_flv_set_8value(buf->last, NGX_HTTP_FLV_SCRIPT_TAG_OBJECT_END_TYPE);
+    buf->last += 1;
+}
+
+
+static ngx_int_t
+ngx_http_flv_package_metadata(ngx_http_flv_file_t *flv)
+{
+    off_t               adjustment;
+    ngx_uint_t          size, origin_header_length, compute_header_length;
+    ngx_str_t           filepositions_name = ngx_string("filepositions");
+    ngx_str_t           times_name = ngx_string("times");
+    ngx_buf_t           buf;
+
+    /* FLV Header + Previous Tag Size*/
+    compute_header_length = NGX_HTTP_FLV_HEADER_SIZE + NGX_HTTP_FLV_PREVIOUS_TAG_SIZE;
+
+    /* MetaData Tag Header*/
+    buf.pos = ngx_pcalloc(flv->request->pool, flv->metadata_tag_size);
+    if (buf.pos == NULL) {
+        return NGX_ERROR;
+    }
+    buf.last = buf.pos;
+    buf.memory = 1;
+
+    size = NGX_HTTP_FLV_TAG_HEADER_SIZE;
+    ngx_memcpy(buf.last, flv->metadata_tag_buf.pos, size);
+    buf.last += size;
+    compute_header_length += size;
+
+    /* AMF Packet + ECM array*/
+    size = NGX_HTTP_FLV_SCRIPT_FIRST_AMF_HEADER_SIZE + NGX_HTTP_FLV_SCRIPT_SECOND_AMF_HEADER_SIZE;
+    ngx_memcpy(buf.last, flv->buffer_metadata_start, size);
+    buf.last += size;
+    ngx_flv_set_32value(buf.last - 4, 2);
+    compute_header_length += size;
+
+    /* Duration */
+    ngx_str_t duration_name = ngx_string("duration");
+    ngx_flv_set_16value(buf.last, duration_name.len);
+    buf.last += 2;
+    compute_header_length += 2;
+
+    ngx_memcpy(buf.last, duration_name.data, duration_name.len);
+    buf.last += duration_name.len;
+    compute_header_length += duration_name.len;
+
+    ngx_flv_metadata_write_double(&buf, flv->duration);
+    compute_header_length += 9;
+
+    /* keyframes array key */
+    size = 9;
+    ngx_flv_set_16value(buf.last, size);
+    buf.last += 2;
+    compute_header_length += 2;
+
+    ngx_memcpy(buf.last, "keyframes", size);
+    buf.last += size;
+    compute_header_length += size;
+
+    ngx_flv_set_8value(buf.last, NGX_HTTP_FLV_SCRIPT_TAG_OBJECT_TYPE);
+    buf.last += 1;
+    compute_header_length += 1;
+
+    /* keyframes strict array value */
+    compute_header_length += (flv->end_frame_index - flv->start_frame_index + 1) * 9 * 2
+                             + 7 * 2 + filepositions_name.len + times_name.len;
+
+    /* keyframes array end */
+    compute_header_length += 3;
+
+    /* ECM array end */
+    compute_header_length += 3;
+
+    /* Metadata previous header */
+    compute_header_length += 4;
+
+    /* H.264 special config tag */
+    if (flv->video_format == NGX_HTTP_FLV_VIDEO_AVC_TYPE) {
+        origin_header_length = flv->offset;
+        compute_header_length += flv->video_tag_size + flv->audio_tag_size;
+    } else {
+        origin_header_length = flv->offset - flv->video_tag_size - flv->audio_tag_size;
+    }
+
+    adjustment = compute_header_length - origin_header_length;
+
+    /* keyframes strict array data*/
+    ngx_flv_metadata_write_keyframes_array(flv, &buf, flv->metadata_filepositions, &filepositions_name, adjustment);
+    ngx_flv_metadata_write_keyframes_array(flv, &buf, flv->metadata_times, &times_name, 0);
+
+    /* keyframes array end + ECM array end*/
+    ngx_flv_metadata_write_array_end(&buf);
+    ngx_flv_metadata_write_array_end(&buf);
+
+    /* Previous Header Size */
+    size = buf.last - buf.pos;
+    ngx_flv_set_32value(buf.last, size);
+    buf.last += 4;
+
+    /* Modify The Data Size*/
+    size -= NGX_HTTP_FLV_TAG_HEADER_SIZE;
+    ngx_flv_set_24value(buf.pos + 1, size);
+
+    flv->metadata_tag_buf.pos = buf.pos;
+    flv->metadata_tag_buf.last = buf.last;
+
+    return NGX_OK;
+}
+
+
 static ngx_int_t
 ngx_http_flv_buf_read_tag(ngx_http_flv_file_t *flv)
 {
@@ -811,6 +1060,9 @@ ngx_http_flv_buf_read_tag(ngx_http_flv_file_t *flv)
     uint8_t                  tag_type;
     uint32_t                 tag_data_size;
     ngx_flv_tag_header_t    *tag_header;
+    ngx_http_request_t      *r;
+
+    r = flv->request;
 
     while (flv->buffer_pos < flv->buffer_end) {
 
@@ -828,9 +1080,18 @@ ngx_http_flv_buf_read_tag(ngx_http_flv_file_t *flv)
             if ((flv->video_parsed == 0) || (flv->audio_parsed == 0)) {
 
                  ngx_log_error(NGX_LOG_ERR, flv->log, 0,
-                          "ngx_http_flv_buf_read_tag: tag too large %uL",
+                          "ngx_http_flv_buf_read_tag: tag too large %uL, need larger buffer",
                           tag_data_size);
-                 return NGX_ERROR;
+
+                 r->headers_out.content_type.data = ngx_pnalloc(r->pool, 128);
+                 if (r->headers_out.content_type.data == NULL) {
+                     return NGX_ERROR;
+                 }
+
+                 r->headers_out.content_type_len = ngx_sprintf(r->headers_out.content_type.data, "%O", flv->offset + tag_data_size + 1024) - r->headers_out.content_type.data;
+                 r->headers_out.content_type.len = r->headers_out.content_type_len;
+
+                 return NGX_HTTP_NOT_IMPLEMENTED;
             }
 
             return NGX_OK;
@@ -861,6 +1122,11 @@ ngx_http_flv_buf_read_tag(ngx_http_flv_file_t *flv)
         }
 
         if (flv->video_parsed && flv->audio_parsed) {
+
+            if (flv->metadata_parsed) {
+                return ngx_http_flv_package_metadata(flv);
+            }
+
             return NGX_OK;
         }
     }
@@ -934,7 +1200,9 @@ ngx_http_flv_process_body(ngx_http_request_t *r)
     ngx_memzero(&flv, sizeof(ngx_http_flv_file_t));
     flv.log = r->connection->log;
     flv.start = (ngx_uint_t)start;
+    flv.end = end;
     flv.start_offset = -1;
+    flv.end_offset = -1;
     flv.request = r;
     flv.buffer_start = buf->pos;
     flv.buffer_pos = buf->pos;
@@ -954,7 +1222,11 @@ ngx_http_flv_process_body(ngx_http_request_t *r)
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "ngx_http_flv_process_body: read tag failed");
 
-        ngx_http_finalize_request(r, NGX_HTTP_BAD_REQUEST);
+        if (rc == NGX_HTTP_NOT_IMPLEMENTED) {
+            ngx_http_finalize_request(r, 299);
+        } else {
+            ngx_http_finalize_request(r, NGX_HTTP_BAD_REQUEST);
+        }
         return;
     }
 
@@ -986,22 +1258,24 @@ ngx_http_flv_process_body(ngx_http_request_t *r)
 
         *prev = &flv.metadata_tag;
         prev = &flv.metadata_tag.next;
-        flv.content_length += flv.metadata_tag_size;
+        flv.content_length += (flv.metadata_tag_buf.last - flv.metadata_tag_buf.pos);
     }
 
     if (flv.video_format == NGX_HTTP_FLV_VIDEO_AVC_TYPE) {
-        ngx_http_flv_set_tag_timestamp(&flv, &flv.video_tag_buf, flv.start_timestamp);
+        if (flv.start_frame_index != 0) {
+            ngx_http_flv_set_tag_timestamp(&flv, &flv.video_tag_buf, flv.start_timestamp);
 
-        *prev = &flv.video_tag;
-        prev = &flv.video_tag.next;
-        flv.content_length += flv.video_tag_size;
+            *prev = &flv.video_tag;
+            prev = &flv.video_tag.next;
+            flv.content_length += flv.video_tag_size;
 
-        ngx_http_flv_set_tag_timestamp(&flv, &flv.audio_tag_buf, flv.start_timestamp);
-
-        *prev = &flv.audio_tag;
-        prev = &flv.audio_tag.next;
-        flv.content_length += flv.audio_tag_size;
+            ngx_http_flv_set_tag_timestamp(&flv, &flv.audio_tag_buf, flv.start_timestamp);
+            *prev = &flv.audio_tag;
+            prev = &flv.audio_tag.next;
+            flv.content_length += flv.audio_tag_size;
+        }
     }
+
     *prev = &flv.tailer_tag;
 
     r->allow_ranges = 0;
@@ -1013,7 +1287,7 @@ ngx_http_flv_process_body(ngx_http_request_t *r)
     }
 
     if (end != -1) {
-        r->headers_out.content_type_len = ngx_sprintf(r->headers_out.content_type.data, "%O-%O", flv.start, end) - r->headers_out.content_type.data;
+        r->headers_out.content_type_len = ngx_sprintf(r->headers_out.content_type.data, "%O-%O", flv.start, flv.end - 1) - r->headers_out.content_type.data;
         r->headers_out.content_type.len = r->headers_out.content_type_len;
     } else {
         r->headers_out.content_type_len = ngx_sprintf(r->headers_out.content_type.data, "%O-", flv.start) - r->headers_out.content_type.data;
