@@ -203,6 +203,8 @@ _M.drag_mp4 = function(drag_type, drag_start, drag_end, slice_size)
     local range_str = "bytes=" .. offset
     set_req_header("Range", range_str)
     ngx.var.newrange = range_str
+
+    return offset
 end
 
 
@@ -240,6 +242,8 @@ _M.drag_flv = function(drag_type, drag_start, drag_end, slice_size)
     local range_str = "bytes=" .. offset
     set_req_header("Range", range_str)
     ngx.var.newrange = range_str
+
+    return offset
 end
 
 
